@@ -123,3 +123,19 @@ def progress(iterator, prefix):
             print_inplace(status)
     sys.stderr.write("\n")
     sys.stderr.flush()
+
+
+def get_partition_check(iterator):
+    start_check = time()
+
+    for data in iterator:
+        yield data
+
+        now = time()
+
+        speed_elapsed = now - start_check
+        if speed_elapsed >= 60:
+            yield True
+            return
+        yield False
+        return

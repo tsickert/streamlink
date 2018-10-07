@@ -10,6 +10,8 @@ import requests
 import sys
 import signal
 import webbrowser
+from time import time
+
 
 from contextlib import closing
 from distutils.version import StrictVersion
@@ -30,6 +32,7 @@ from streamlink.plugin import PluginOptions
 from streamlink.utils import LazyFormatter
 
 import streamlink.logger as logger
+from streamlink_cli.utils.progress import get_partition_check
 from .argparser import build_parser
 from .compat import stdout, is_win32
 from streamlink.utils.encoding import maybe_encode
@@ -48,6 +51,13 @@ QUIET_OPTIONS = ("json", "stream_url", "subprocess_cmdline", "quiet")
 args = console = streamlink = plugin = stream_fd = output = None
 
 log = logging.getLogger("streamlink.cli")
+
+"""
+TODO:
+
+- Check on the first/last frame in a file and make sure that data is being written by frame.
+- Might have to use a %(mod) on the data when writing to make sure that entire frames are being written...
+"""
 
 
 def check_file_output(filename, force):
@@ -75,8 +85,13 @@ def create_output(plugin):
      - A named pipe that the subprocess reads from
      - A regular file
 
+     Steak Bruv:
+
+     This is where the CLI args for output are used.
+
     """
 
+    # File output, this is where we create file output
     if args.output:
         if args.output == "-":
             out = FileOutput(fd=stdout)
@@ -283,7 +298,9 @@ def open_stream(stream):
 
 
 def output_stream(plugin, stream):
-    """Open stream, create output and finally write the stream to output."""
+    """
+        Open stream, create output and finally write the stream to output.
+    """
     global output
 
     success_open = False
@@ -317,6 +334,69 @@ def output_stream(plugin, stream):
     return True
 
 
+def read_then_output_stream(plugin, stream, partition_size=60, chunk_size=8192):
+    """Reads data from stream, opens output for data, then writes it to that output."""
+    # show_progress = isinstance(output, FileOutput) and output.fd is not stdout
+    success_open = False
+    for i in range(args.retry_open):
+        try:
+            stream_fd, prebuffer = open_stream(stream)
+            success_open = True
+            break
+        except StreamError as err:
+            log.error("Try {0}/{1}: Could not open stream {2} ({3})", i + 1, args.retry_open, stream, err)
+
+    if not success_open:
+        console.exit("Could not open stream {0}, tried {1} times, exiting", stream, args.retry_open)
+
+    print('Partitioning Stream!')
+
+    stream_iterator = chain(
+        [prebuffer],
+         iter(partial(stream_fd.read, chunk_size), b"")
+    )
+    count = 1
+    stream_iterator = progress(stream_iterator,
+                               prefix=os.path.basename(clean_partitioned_filename(args.output, count)))
+    output = check_file_output(clean_partitioned_filename(args.output, count), args.force)
+    try:
+        output.open()
+        started = time()
+        for data in stream_iterator:
+            # print(stream_iterator)
+            got_data = time()
+            try:
+                elapsed = got_data - started
+                if elapsed >= 60:
+                    started = time()
+                    output.close()
+                    count += 1
+                if not output.opened:
+                    output = check_file_output(clean_partitioned_filename(args.output, count), args.force)
+                    output.open()
+                output.write(data)
+            except IOError as err:
+                console.exit("Error when writing to output: {0}, exiting", err)
+                break
+    except IOError as err:
+        console.exit("Error when reading from stream: {0}, exiting", err)
+    finally:
+        stream_fd.close()
+        log.info("Stream ended")
+    return True
+
+
+def clean_partitioned_filename(filename, count):
+    if ".avi" in filename:
+        index_of_avi = filename.find(".avi")
+        return filename[0:index_of_avi] + str(count) + filename[index_of_avi:]
+    elif ".mp4" in filename:
+        index_of_mp4 = filename.find(".mp4")
+        return filename[0:index_of_mp4] + str(count) + filename[index_of_mp4:]
+    else:
+        return filename
+
+
 def read_stream(stream, output, prebuffer, chunk_size=8192):
     """Reads data from stream and then writes it to the output."""
     is_player = isinstance(output, PlayerOutput)
@@ -332,6 +412,8 @@ def read_stream(stream, output, prebuffer, chunk_size=8192):
         stream_iterator = progress(stream_iterator,
                                    prefix=os.path.basename(args.output))
 
+    # print(args.output.partition)
+
     try:
         for data in stream_iterator:
             # We need to check if the player process still exists when
@@ -344,6 +426,7 @@ def read_stream(stream, output, prebuffer, chunk_size=8192):
                     log.info("Player closed")
                     break
 
+            # print(stream_iterator)
             try:
                 output.write(data)
             except IOError as err:
@@ -423,8 +506,11 @@ def handle_stream(plugin, streams, stream_name):
             else:
                 log.info("Opening stream: {0} ({1})", stream_name,
                          stream_type)
-
-                success = output_stream(plugin, stream)
+                if args.partition:
+                    # print(args.output)
+                    success = read_then_output_stream(plugin, stream, args.partition_size)
+                else:
+                    success = output_stream(plugin, stream)
 
             if success:
                 break
@@ -568,7 +654,9 @@ def handle_url():
 
     if args.stream:
         validstreams = format_valid_streams(plugin, streams)
+        # Get stream from arguments (weight)
         for stream_name in args.stream:
+            # Get stream from the list of found streams and handle
             if stream_name in streams:
                 log.info("Available streams: {0}", validstreams)
                 handle_stream(plugin, streams, stream_name)
@@ -841,6 +929,11 @@ def setup_options():
     if args.ffmpeg_audio_transcode:
         streamlink.set_option("ffmpeg-audio-transcode", args.ffmpeg_audio_transcode)
 
+    if args.partition:
+        streamlink.set_option("partition", args.partition)
+    if args.partition:
+        streamlink.set_option("partition-size", args.partition_size)
+
     streamlink.set_option("subprocess-errorlog", args.subprocess_errorlog)
     streamlink.set_option("subprocess-errorlog-path", args.subprocess_errorlog_path)
     streamlink.set_option("locale", args.locale)
@@ -963,6 +1056,8 @@ def main():
     else:
         console_out = sys.stdout
 
+    print(args)
+
     # We don't want log output when we are printing JSON or a command-line.
     silent_log = any(getattr(args, attr) for attr in QUIET_OPTIONS)
     log_level = args.loglevel if not silent_log else "none"
@@ -1001,6 +1096,7 @@ def main():
             streamlink.resolve_url_no_redirect(args.can_handle_url_no_redirect)
         except NoPluginError:
             error_code = 1
+    # Steak Bruv: Twitch logic entry point
     elif args.url:
         try:
             setup_options()

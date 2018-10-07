@@ -77,7 +77,9 @@ class Streamlink(object):
             "ffmpeg-video-transcode": "copy",
             "ffmpeg-audio-transcode": "copy",
             "locale": None,
-            "user-input-requester": None
+            "user-input-requester": None,
+            "partition": False,
+            "partition-size": 60
         })
         if options:
             self.options.update(options)
@@ -291,6 +293,13 @@ class Streamlink(object):
             self.http.cert = value
         elif key == "http-timeout":
             self.http.timeout = value
+        elif key == "partition":
+            print('Partition found: {}'.format(value))
+            self.options.partition = value
+        elif key == "partition-size":
+            print(value)
+            print('Partition size found: {}'.format(value))
+            self.options.partition_size = value
         else:
             self.options.set(key, value)
 

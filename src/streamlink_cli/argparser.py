@@ -500,7 +500,22 @@ def build_parser():
         Write stream data to stdout instead of playing it.
         """
     )
-
+    output.add_argument(
+        "--partition",
+        type=boolean,
+        metavar="{yes,true,1,on,no,false,0,off}",
+        default=False,
+        help="""
+        Partition output into a sequence of files.
+        """
+    )
+    output.add_argument(
+        "--partition-size",
+        type=int,
+        help="""
+        Size of output partition.
+        """
+    )
     stream = parser.add_argument_group("Stream options")
     stream.add_argument(
         "--url",
