@@ -389,10 +389,10 @@ def read_then_output_stream(plugin, stream, partition_size=60, chunk_size=8192):
 def clean_partitioned_filename(filename, count):
     if ".avi" in filename:
         index_of_avi = filename.find(".avi")
-        return filename[0:index_of_avi] + str(count) + filename[index_of_avi:]
+        return filename[0:index_of_avi] + "_" + str(count) + filename[index_of_avi:]
     elif ".mp4" in filename:
         index_of_mp4 = filename.find(".mp4")
-        return filename[0:index_of_mp4] + str(count) + filename[index_of_mp4:]
+        return filename[0:index_of_mp4] + "_" + str(count) + filename[index_of_mp4:]
     else:
         return filename
 
